@@ -45,6 +45,12 @@ export function parseGeminiRetryDelayMs(error: unknown): number {
 
 export function shortenGeminiError(error: unknown): string {
   const message = error instanceof Error ? error.message : String(error);
+  if (message.includes("404") || /not found/i.test(message)) {
+    return "Gemini 모델/API를 찾을 수 없음 (404) — API 키·모델명 확인";
+  }
+  if (message.includes("403") || /permission denied/i.test(message)) {
+    return "Gemini API 키 권한 오류 (403)";
+  }
   if (message.includes("429") && /limit:\s*0/i.test(message)) {
     const modelMatch = message.match(/model:\s*([\w.-]+)/i);
     return modelMatch

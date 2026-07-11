@@ -1,4 +1,5 @@
 import { GoogleGenerativeAI } from "@google/generative-ai";
+import { buildGeminiGenerationConfig } from "@/lib/gemini-generation-config";
 import { resolveGeminiModel } from "@/lib/gemini-config";
 import type { AiProvider, AppSettings, GenerateResult, TrendItem } from "@/types";
 import { buildTrendContext } from "@/services/trends";
@@ -60,7 +61,7 @@ async function callGemini(
   const m = genAI.getGenerativeModel({ model });
   const result = await m.generateContent({
     contents: [{ role: "user", parts: [{ text: prompt }] }],
-    generationConfig: { temperature: 0.85, responseMimeType: "application/json" },
+    generationConfig: buildGeminiGenerationConfig(),
   });
   return result.response.text();
 }

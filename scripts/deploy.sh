@@ -219,8 +219,12 @@ print_summary() {
   1. Lightsail Firewall → Custom TCP ${APP_PORT} 허용
   2. .env.local → APP_URL=http://${ip}:${APP_PORT}
   3. Lambda 환경변수 APP_URL, CRON_SECRET 동일 설정
-  4. curl 테스트:
+  4. Lambda Timeout → General configuration → **10초 이상** (3초 기본값이면 타임아웃)
+  5. curl 테스트 (즉시 응답):
      curl -X POST "http://${ip}:${APP_PORT}/api/cron/trends" \\
+       -H "Authorization: Bearer YOUR_CRON_SECRET"
+  6. 전체 결과 대기 테스트:
+     curl -X POST "http://${ip}:${APP_PORT}/api/cron/trends?wait=true" \\
        -H "Authorization: Bearer YOUR_CRON_SECRET"
 
   로그:  pm2 logs ${PM2_APP_NAME}

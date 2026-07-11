@@ -1,3 +1,4 @@
+import { buildGeminiGenerationConfig } from "@/lib/gemini-generation-config";
 import { GoogleGenerativeAI } from "@google/generative-ai";
 import { getSettings } from "@/lib/db";
 import { resolveGeminiModel } from "@/lib/gemini-config";
@@ -104,10 +105,7 @@ async function generateBlogDraftOnce(
 
   const result = await geminiModel.generateContent({
     contents: [{ role: "user", parts: [{ text: GENERATION_PROMPT + context }] }],
-    generationConfig: {
-      temperature: 0.85,
-      responseMimeType: "application/json",
-    },
+    generationConfig: buildGeminiGenerationConfig(),
   });
 
   const parsed = parseGeminiJson(result.response.text());
@@ -177,14 +175,11 @@ export async function generateBlogDraftSafe(
     const result = await generateBlogDraftWithRetry(trend);
     return { result, usedFallback: false };
   } catch (error) {
-    if (isGeminiQuotaError(error)) {
-      return {
-        result: generateMockDraft(trend),
-        usedFallback: true,
-        warning: `${shortenGeminiError(error)} — 샘플 초안으로 대체`,
-      };
-    }
-    throw error;
+    return {
+      result: generateMockDraft(trend),
+      usedFallback: true,
+      warning: `${shortenGeminiError(error)} — 샘플 초안으로 대체`,
+    };
   }
 }
 
@@ -255,10 +250,7 @@ export async function regenerateDraft(
   try {
     const result = await geminiModel.generateContent({
       contents: [{ role: "user", parts: [{ text: prompt }] }],
-      generationConfig: {
-        temperature: 0.85,
-        responseMimeType: "application/json",
-      },
+      generationConfig: buildGeminiGenerationConfig(),
     });
 
     const parsed = parseGeminiJson(result.response.text());
@@ -279,16 +271,13 @@ export async function regenerateDraft(
       trend.keyword
     );
   } catch (error) {
-    if (isGeminiQuotaError(error)) {
-      const mock = generateMockDraft(trend);
-      return {
-        ...mock,
-        spamNotes: [mock.spamNotes, `${shortenGeminiError(error)} — 샘플 초안으로 대체`]
-          .filter(Boolean)
-          .join(" | "),
-      };
-    }
-    throw error;
+    const mock = generateMockDraft(trend);
+    return {
+      ...mock,
+      spamNotes: [mock.spamNotes, `${shortenGeminiError(error)} — 샘플 초안으로 대체`]
+        .filter(Boolean)
+        .join(" | "),
+    };
   }
 }
 
@@ -316,7 +305,7 @@ export async function refinePromptScript(
           ],
         },
       ],
-      generationConfig: { temperature: 0.6 },
+      generationConfig: buildGeminiGenerationConfig({ json: false, temperature: 0.6 }),
     });
 
     return result.response.text().trim() || currentScript;

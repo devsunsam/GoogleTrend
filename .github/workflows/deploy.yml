@@ -1,0 +1,56 @@
+name: Deploy to Lightsail
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-lightsail
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+
+      - run: npm ci
+      - run: npm run test
+
+  deploy:
+    needs: test
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+    steps:
+      - name: Deploy to Lightsail via SSH
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.LIGHTSAIL_HOST }}
+          username: ${{ secrets.LIGHTSAIL_USER }}
+          key: ${{ secrets.LIGHTSAIL_SSH_KEY }}
+          port: ${{ secrets.LIGHTSAIL_SSH_PORT || 22 }}
+          script_stop: true
+          command_timeout: 20m
+          script: |
+            set -euo pipefail
+            APP_DIR="${{ secrets.LIGHTSAIL_APP_DIR }}"
+            if [ -z "$APP_DIR" ]; then
+              APP_DIR="$HOME/trendblog"
+            fi
+            if [ ! -d "$APP_DIR/.git" ]; then
+              echo "ERROR: $APP_DIR 에 git 저장소가 없습니다."
+              echo "Lightsail에서 clone 후 다시 push 하세요:"
+              echo "  git clone https://github.com/${{ github.repository }}.git $APP_DIR"
+              exit 1
+            fi
+            cd "$APP_DIR"
+            git fetch origin main
+            git reset --hard origin/main
+            chmod +x scripts/deploy.sh
+            ./scripts/deploy.sh

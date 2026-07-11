@@ -45,13 +45,19 @@ npm run dev          # 터미널 1
 npm run scheduler    # 터미널 2
 ```
 
-### AWS (EventBridge + Lambda 또는 EC2 cron)
+### AWS (EventBridge + Lambda)
 ```
 POST https://your-domain.com/api/cron/trends
 Authorization: Bearer {CRON_SECRET}
 ```
 
+- Lambda는 **즉시 `accepted: true` 응답**을 받고, 실제 수집·초안 생성은 **Lightsail 앱에서 백그라운드** 실행됩니다.
+- Lambda **Timeout: 10초 이상** (기본 3초면 타임아웃 — 반드시 변경)
+- 수동으로 전체 결과를 기다리려면: `?wait=true` 쿼리 추가
+
 EventBridge 규칙: `rate(4 hours)` 또는 `cron(0 */4 * * ? *)`
+
+Lambda 참조 코드: `scripts/lambda-scheduled-catcher.mjs`
 
 ## AWS / GCP 세팅 가이드
 
@@ -93,6 +99,39 @@ git pull
 ```
 
 Lightsail Firewall에서 **3000** 포트(또는 Nginx 사용 시 80/443)를 허용하세요.
+
+## GitHub → Lightsail 자동 배포
+
+`main` 브랜치에 push 하면 GitHub Actions가 테스트 후 Lightsail에 SSH로 배포합니다.
+
+### 1) Lightsail 최초 1회 (수동)
+
+```bash
+git clone https://github.com/devsunsam/GoogleTrend.git ~/trendblog
+cd ~/trendblog
+cp .env.example .env.local && nano .env.local
+chmod +x scripts/deploy.sh
+./scripts/deploy.sh --setup
+```
+
+### 2) GitHub Secrets 등록
+
+Repository → **Settings** → **Secrets and variables** → **Actions** → **New repository secret**
+
+| Secret | 예시 | 필수 |
+|--------|------|------|
+| `LIGHTSAIL_HOST` | `13.125.x.x` (고정 IP) | ✅ |
+| `LIGHTSAIL_USER` | `ubuntu` | ✅ |
+| `LIGHTSAIL_SSH_KEY` | Lightsail `.pem` 키 **전체 내용** | ✅ |
+| `LIGHTSAIL_APP_DIR` | `/home/ubuntu/trendblog` | 선택 |
+| `LIGHTSAIL_SSH_PORT` | `22` | 선택 |
+
+### 3) 자동 배포 동작
+
+- push to `main` → `npm test` → SSH → `git pull` + `./scripts/deploy.sh`
+- 수동 실행: Actions → **Deploy to Lightsail** → **Run workflow**
+
+`.env.local`과 `data/`는 서버에만 있으며 git에 포함되지 않습니다.
 
 ## 명령어
 

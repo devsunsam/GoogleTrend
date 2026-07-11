@@ -1,6 +1,7 @@
 import { GoogleGenerativeAI } from "@google/generative-ai";
 import { NextResponse } from "next/server";
 import { DEFAULT_GEMINI_MODEL } from "@/lib/gemini-config";
+import { buildGeminiGenerationConfig } from "@/lib/gemini-generation-config";
 import { getSettings } from "@/lib/db";
 import { getGeminiModelWarnings, parseGeminiErrorDetails } from "@/lib/gemini-quota";
 
@@ -16,11 +17,7 @@ async function probeGeminiModel(apiKey: string) {
     const geminiModel = client.getGenerativeModel({ model: DEFAULT_GEMINI_MODEL });
     const result = await geminiModel.generateContent({
       contents: [{ role: "user", parts: [{ text: 'Reply with JSON: {"ok":true}' }] }],
-      generationConfig: {
-        temperature: 0,
-        responseMimeType: "application/json",
-        maxOutputTokens: 16,
-      },
+      generationConfig: buildGeminiGenerationConfig({ maxOutputTokens: 16 }),
     });
     return {
       ok: true,
