@@ -1,4 +1,5 @@
 import { GoogleGenerativeAI } from "@google/generative-ai";
+import { resolveGeminiModel } from "@/lib/gemini-config";
 import type { AiProvider, AppSettings, GenerateResult, TrendItem } from "@/types";
 import { buildTrendContext } from "@/services/trends";
 import { analyzeContentLayout } from "@/lib/content-layout";
@@ -150,7 +151,7 @@ export async function generateWithProvider(
   let raw: string;
   switch (provider) {
     case "gemini":
-      raw = await callGemini(prompt, keys.gemini, settings.geminiModel);
+      raw = await callGemini(prompt, keys.gemini, resolveGeminiModel());
       break;
     case "chatgpt":
       raw = await callOpenAI(prompt, keys.openai, settings.openaiModel);

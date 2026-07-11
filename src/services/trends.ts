@@ -22,7 +22,7 @@ interface GoogleTrendItem {
  */
 export async function fetchTrendingKeywords(
   geo = "US",
-  _hours = 4
+  _minutes = 240
 ): Promise<TrendItem[]> {
   const realtime = await fetchRealtimeTrends(geo);
   if (realtime.length > 0) {

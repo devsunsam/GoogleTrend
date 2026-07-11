@@ -1,4 +1,5 @@
 import { GoogleGenerativeAI } from "@google/generative-ai";
+import { DEFAULT_GEMINI_MODEL } from "@/lib/gemini-config";
 import { v4 as uuidv4 } from "uuid";
 import { saveGeneratedImage } from "@/lib/db";
 
@@ -32,7 +33,7 @@ async function tryGeminiImage(
   promptScript: string
 ): Promise<{ imageUrl: string; method: "gemini" } | null> {
   const genAI = new GoogleGenerativeAI(apiKey);
-  const modelName = process.env.GEMINI_IMAGE_MODEL || "gemini-2.0-flash-preview-image-generation";
+  const modelName = process.env.GEMINI_IMAGE_MODEL || DEFAULT_GEMINI_MODEL;
 
   try {
     const model = genAI.getGenerativeModel({ model: modelName });

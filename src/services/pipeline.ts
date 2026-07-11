@@ -9,30 +9,107 @@ import {
   upsertTrends,
 } from "@/lib/db";
 import { fetchTrendingKeywords, getSampleTrends } from "@/services/trends";
-import { generateBlogDraft, generateMockDraft } from "@/services/gemini";
-import type { BlogDraft, FetchTrendsResult, TrendSnapshot } from "@/types";
+import { generateBlogDraftSafe, generateMockDraft } from "@/services/gemini";
+import { sleep } from "@/lib/gemini-quota";
+import type {
+  BlogDraft,
+  FetchTrendsResult,
+  TrendItem,
+  TrendSnapshot,
+  TrendTestResult,
+} from "@/types";
 
-export async function runTrendFetchPipeline(options?: {
-  useSample?: boolean;
-  maxDrafts?: number;
-}): Promise<FetchTrendsResult> {
-  const settings = getSettings();
+async function collectTrends(
+  settings: ReturnType<typeof getSettings>,
+  options?: { useSample?: boolean }
+): Promise<{ trends: TrendItem[]; errors: string[]; usedSample: boolean }> {
   const errors: string[] = [];
-  let trends;
+  let trends: TrendItem[] = [];
+  let usedSample = false;
 
   try {
     if (options?.useSample || process.env.USE_SAMPLE_TRENDS === "true") {
       trends = getSampleTrends();
+      usedSample = true;
     } else {
-      trends = await fetchTrendingKeywords(settings.geo, settings.trendHours);
+      trends = await fetchTrendingKeywords(settings.geo, settings.trendMinutes);
       if (trends.length === 0) {
         trends = getSampleTrends();
+        usedSample = true;
         errors.push("Google Trends API 응답 없음 — 샘플 데이터 사용");
       }
     }
   } catch (e) {
     trends = getSampleTrends();
+    usedSample = true;
     errors.push(`트렌드 수집 실패: ${e instanceof Error ? e.message : String(e)}`);
+  }
+
+  return { trends, errors, usedSample };
+}
+
+export async function runTrendTestPipeline(options?: {
+  useSample?: boolean;
+  dryRun?: boolean;
+  maxDrafts?: number;
+}): Promise<TrendTestResult> {
+  const startedAt = Date.now();
+  const settings = getSettings();
+  const dryRun = options?.dryRun !== false;
+  const { trends, errors, usedSample } = await collectTrends(settings, options);
+
+  if (dryRun) {
+    return {
+      ok: errors.length === 0 || trends.length > 0,
+      durationMs: Date.now() - startedAt,
+      geo: settings.geo,
+      trendMinutes: settings.trendMinutes,
+      usedSample,
+      dryRun: true,
+      fetched: trends.length,
+      draftsCreated: 0,
+      errors,
+      trends,
+    };
+  }
+
+  const result = await runTrendFetchPipeline({
+    useSample: options?.useSample,
+    maxDrafts: options?.maxDrafts ?? 1,
+    preloadedTrends: trends,
+    preloadedErrors: errors,
+    usedSample,
+  });
+
+  return {
+    ok: result.errors.length === 0 || result.fetched > 0,
+    durationMs: Date.now() - startedAt,
+    geo: settings.geo,
+    trendMinutes: settings.trendMinutes,
+    usedSample,
+    dryRun: false,
+    fetched: result.fetched,
+    draftsCreated: result.draftsCreated,
+    errors: result.errors,
+    trends,
+  };
+}
+
+export async function runTrendFetchPipeline(options?: {
+  useSample?: boolean;
+  maxDrafts?: number;
+  preloadedTrends?: TrendItem[];
+  preloadedErrors?: string[];
+  usedSample?: boolean;
+}): Promise<FetchTrendsResult> {
+  const settings = getSettings();
+  const errors: string[] = [...(options?.preloadedErrors ?? [])];
+  let trends = options?.preloadedTrends;
+
+  if (!trends) {
+    const collected = await collectTrends(settings, options);
+    trends = collected.trends;
+    errors.push(...collected.errors);
   }
 
   const fetchedAt = new Date().toISOString();
@@ -40,11 +117,25 @@ export async function runTrendFetchPipeline(options?: {
   let draftsCreated = 0;
   const trendSnapshots: TrendSnapshot[] = [];
 
-  for (const trend of trends) {
+  for (let index = 0; index < trends.length; index++) {
+    const trend = trends[index];
+    if (index > 0) {
+      await sleep(1500);
+    }
+
     try {
-      const generated = process.env.GEMINI_API_KEY
-        ? await generateBlogDraft(trend)
-        : generateMockDraft(trend);
+      const { apiKey } = {
+        apiKey:
+          settings.geminiApiKey || process.env.GEMINI_API_KEY || "",
+      };
+
+      const { result: generated, warning } = apiKey
+        ? await generateBlogDraftSafe(trend)
+        : { result: generateMockDraft(trend), warning: undefined };
+
+      if (warning) {
+        errors.push(`"${trend.keyword}": ${warning}`);
+      }
 
       const snapshot: TrendSnapshot = {
         id: uuidv4(),
@@ -56,7 +147,7 @@ export async function runTrendFetchPipeline(options?: {
         fetchedAt,
       };
 
-      if (draftExistsForKeyword(trend.keyword, settings.trendHours)) {
+      if (draftExistsForKeyword(trend.keyword, settings.trendMinutes)) {
         const existing = upsertTrendOnly(snapshot);
         trendSnapshots.push(existing);
         continue;

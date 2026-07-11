@@ -60,20 +60,31 @@ export interface BlogDraft {
   notifiedAt?: string;
 }
 
+export type AwsScheduleType = "scheduler" | "rule";
+
 export interface AppSettings {
   blogUrl: string;
   blogApiKey: string;
   blogPlatform: "webhook" | "wordpress" | "blogger" | "none";
   geo: string;
-  trendHours: number;
+  trendMinutes: number;
   cronSecret: string;
   lastFetchAt?: string;
+  lastSchedulerSyncAt?: string;
+  lastSchedulerSyncMessage?: string;
   openaiApiKey: string;
   geminiApiKey: string;
   anthropicApiKey: string;
   openaiModel: string;
   geminiModel: string;
   anthropicModel: string;
+  awsRegion: string;
+  awsScheduleType: AwsScheduleType;
+  awsSchedulerName: string;
+  awsSchedulerGroup: string;
+  awsEventBridgeRuleName: string;
+  awsAccessKeyId: string;
+  awsSecretAccessKey: string;
 }
 
 export interface GenerateResult {
@@ -92,6 +103,21 @@ export interface FetchTrendsResult {
   fetched: number;
   draftsCreated: number;
   errors: string[];
+}
+
+export interface TrendTestResult extends FetchTrendsResult {
+  ok: boolean;
+  durationMs: number;
+  geo: string;
+  trendMinutes: number;
+  usedSample: boolean;
+  dryRun: boolean;
+  trends: TrendItem[];
+  schedulerSync?: {
+    ok: boolean;
+    expression: string;
+    message: string;
+  };
 }
 
 export interface LayoutAnalysis {

@@ -1,11 +1,27 @@
 import { GoogleGenerativeAI } from "@google/generative-ai";
+import { getSettings } from "@/lib/db";
+import { resolveGeminiModel } from "@/lib/gemini-config";
+import {
+  isGeminiQuotaError,
+  parseGeminiErrorDetails,
+  shortenGeminiError,
+  sleep,
+} from "@/lib/gemini-quota";
 import type { GenerateResult, TrendItem } from "@/types";
 import { buildTrendContext } from "@/services/trends";
 import { evaluateSpamRisk, SPAM_AVOIDANCE_PROMPT } from "@/lib/spam-guard";
 import { analyzeContentLayout } from "@/lib/content-layout";
 
-function getGeminiClient() {
-  const apiKey = process.env.GEMINI_API_KEY;
+function resolveGeminiConfig() {
+  const settings = getSettings();
+  return {
+    apiKey: settings.geminiApiKey || process.env.GEMINI_API_KEY || "",
+    model: resolveGeminiModel(),
+    keySource: settings.geminiApiKey ? "settings" : "env",
+  };
+}
+
+function getGeminiClient(apiKey: string) {
   if (!apiKey) {
     throw new Error("GEMINI_API_KEY 환경변수가 설정되지 않았습니다.");
   }
@@ -40,7 +56,11 @@ ${HUMAN_WRITING_RULES}
 ## 트렌드 정보
 `;
 
-function attachLayout(result: Omit<GenerateResult, "spamScore" | "spamNotes">, keyword: string): GenerateResult {
+function attachLayout(
+  result: Omit<GenerateResult, "spamScore" | "spamNotes">,
+  keyword: string,
+  extraNotes = ""
+): GenerateResult {
   const layout = analyzeContentLayout(result.body, keyword);
   const spam = evaluateSpamRisk(result.title, result.body);
   return {
@@ -48,7 +68,7 @@ function attachLayout(result: Omit<GenerateResult, "spamScore" | "spamNotes">, k
     imageSlots: layout.imageSlots,
     adSlots: layout.adSlots,
     spamScore: spam.score,
-    spamNotes: spam.notes,
+    spamNotes: [spam.notes, extraNotes].filter(Boolean).join(" | "),
   };
 }
 
@@ -67,13 +87,22 @@ function parseGeminiJson(text: string): {
   }
 }
 
-export async function generateBlogDraft(trend: TrendItem): Promise<GenerateResult> {
-  const context = buildTrendContext(trend);
-  const model = getGeminiClient().getGenerativeModel({
-    model: process.env.GEMINI_MODEL || "gemini-2.0-flash",
-  });
+function inferTrendReason(trend: TrendItem): string {
+  if (trend.newsContext) return `${trend.newsContext} 관련 검색이 급증하고 있습니다.`;
+  if (trend.relatedQueries?.length)
+    return `${trend.relatedQueries.slice(0, 2).join(", ")} 등 연관 검색과 함께 주목받고 있습니다.`;
+  return "최근 관련 이슈로 검색량이 증가했습니다.";
+}
 
-  const result = await model.generateContent({
+async function generateBlogDraftOnce(
+  trend: TrendItem,
+  apiKey: string,
+  model: string
+): Promise<GenerateResult> {
+  const context = buildTrendContext(trend);
+  const geminiModel = getGeminiClient(apiKey).getGenerativeModel({ model });
+
+  const result = await geminiModel.generateContent({
     contents: [{ role: "user", parts: [{ text: GENERATION_PROMPT + context }] }],
     generationConfig: {
       temperature: 0.85,
@@ -100,11 +129,71 @@ export async function generateBlogDraft(trend: TrendItem): Promise<GenerateResul
   );
 }
 
-function inferTrendReason(trend: TrendItem): string {
-  if (trend.newsContext) return `${trend.newsContext} 관련 검색이 급증하고 있습니다.`;
-  if (trend.relatedQueries?.length)
-    return `${trend.relatedQueries.slice(0, 2).join(", ")} 등 연관 검색과 함께 주목받고 있습니다.`;
-  return "최근 관련 이슈로 검색량이 증가했습니다.";
+async function generateBlogDraftWithRetry(trend: TrendItem): Promise<GenerateResult> {
+  const { apiKey } = resolveGeminiConfig();
+  const model = resolveGeminiModel();
+  let lastError: unknown;
+
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      return await generateBlogDraftOnce(trend, apiKey, model);
+    } catch (error) {
+      lastError = error;
+      const details = parseGeminiErrorDetails(error);
+      if (attempt === 0 && isGeminiQuotaError(error) && !details.limitZero) {
+        await sleep(details.retryDelayMs);
+        continue;
+      }
+      break;
+    }
+  }
+
+  const detail = lastError ? parseGeminiErrorDetails(lastError) : undefined;
+  throw new Error(
+    detail?.summary ||
+      (lastError instanceof Error ? lastError.message : "Gemini 초안 생성 실패")
+  );
+}
+
+export interface DraftGenerationOutcome {
+  result: GenerateResult;
+  usedFallback: boolean;
+  warning?: string;
+}
+
+export async function generateBlogDraftSafe(
+  trend: TrendItem
+): Promise<DraftGenerationOutcome> {
+  const { apiKey } = resolveGeminiConfig();
+  if (!apiKey) {
+    return {
+      result: generateMockDraft(trend),
+      usedFallback: true,
+      warning: "Gemini API 키 없음 — 샘플 초안 사용",
+    };
+  }
+
+  try {
+    const result = await generateBlogDraftWithRetry(trend);
+    return { result, usedFallback: false };
+  } catch (error) {
+    if (isGeminiQuotaError(error)) {
+      return {
+        result: generateMockDraft(trend),
+        usedFallback: true,
+        warning: `${shortenGeminiError(error)} — 샘플 초안으로 대체`,
+      };
+    }
+    throw error;
+  }
+}
+
+export async function generateBlogDraft(trend: TrendItem): Promise<GenerateResult> {
+  const outcome = await generateBlogDraftSafe(trend);
+  if (outcome.warning) {
+    throw new Error(outcome.warning);
+  }
+  return outcome.result;
 }
 
 /** API 키 없을 때 UI 테스트용 */
@@ -150,45 +239,57 @@ export async function regenerateDraft(
   trend: TrendItem,
   feedback?: string
 ): Promise<GenerateResult> {
-  if (!process.env.GEMINI_API_KEY) {
+  const { apiKey, model } = resolveGeminiConfig();
+  if (!apiKey) {
     return generateMockDraft(trend);
   }
 
   const context = buildTrendContext(trend);
-  const model = getGeminiClient().getGenerativeModel({
-    model: process.env.GEMINI_MODEL || "gemini-2.0-flash",
-  });
+  const geminiModel = getGeminiClient(apiKey).getGenerativeModel({ model });
 
   const prompt =
     GENERATION_PROMPT +
     context +
     (feedback ? `\n\n## 수정 요청\n${feedback}` : "");
 
-  const result = await model.generateContent({
-    contents: [{ role: "user", parts: [{ text: prompt }] }],
-    generationConfig: {
-      temperature: 0.85,
-      responseMimeType: "application/json",
-    },
-  });
+  try {
+    const result = await geminiModel.generateContent({
+      contents: [{ role: "user", parts: [{ text: prompt }] }],
+      generationConfig: {
+        temperature: 0.85,
+        responseMimeType: "application/json",
+      },
+    });
 
-  const parsed = parseGeminiJson(result.response.text());
-  let body = parsed.body;
-  if (!body.includes("요약")) {
-    body = `## 요약\n\n${parsed.summary}\n\n${body}`;
+    const parsed = parseGeminiJson(result.response.text());
+    let body = parsed.body;
+    if (!body.includes("요약")) {
+      body = `## 요약\n\n${parsed.summary}\n\n${body}`;
+    }
+
+    return attachLayout(
+      {
+        trendReason: parsed.trendReason?.trim() || inferTrendReason(trend),
+        title: parsed.title.trim(),
+        summary: parsed.summary.trim(),
+        body: body.trim(),
+        imageSlots: [],
+        adSlots: [],
+      },
+      trend.keyword
+    );
+  } catch (error) {
+    if (isGeminiQuotaError(error)) {
+      const mock = generateMockDraft(trend);
+      return {
+        ...mock,
+        spamNotes: [mock.spamNotes, `${shortenGeminiError(error)} — 샘플 초안으로 대체`]
+          .filter(Boolean)
+          .join(" | "),
+      };
+    }
+    throw error;
   }
-
-  return attachLayout(
-    {
-      trendReason: parsed.trendReason?.trim() || inferTrendReason(trend),
-      title: parsed.title.trim(),
-      summary: parsed.summary.trim(),
-      body: body.trim(),
-      imageSlots: [],
-      adSlots: [],
-    },
-    trend.keyword
-  );
 }
 
 export async function refinePromptScript(
@@ -196,27 +297,31 @@ export async function refinePromptScript(
   currentScript: string,
   sectionTitle: string
 ): Promise<string> {
-  if (!process.env.GEMINI_API_KEY) return currentScript;
+  const { apiKey, model } = resolveGeminiConfig();
+  if (!apiKey) return currentScript;
 
-  const model = getGeminiClient().getGenerativeModel({
-    model: process.env.GEMINI_MODEL || "gemini-2.0-flash",
-  });
+  const geminiModel = getGeminiClient(apiKey).getGenerativeModel({ model });
 
-  const result = await model.generateContent({
-    contents: [
-      {
-        role: "user",
-        parts: [
-          {
-            text: `블로그 '${keyword}' 글의 '${sectionTitle}' 섹션용 저작권 프리 AI 이미지 생성 스크립트를 다듬어 주세요.
+  try {
+    const result = await geminiModel.generateContent({
+      contents: [
+        {
+          role: "user",
+          parts: [
+            {
+              text: `블로그 '${keyword}' 글의 '${sectionTitle}' 섹션용 저작권 프리 AI 이미지 생성 스크립트를 다듬어 주세요.
 실제 인물 초상권, 상표, 저작권 문제가 없도록 일반적이고 중립적으로 작성하세요.
 스크립트만 출력하세요.\n\n현재 스크립트:\n${currentScript}`,
-          },
-        ],
-      },
-    ],
-    generationConfig: { temperature: 0.6 },
-  });
+            },
+          ],
+        },
+      ],
+      generationConfig: { temperature: 0.6 },
+    });
 
-  return result.response.text().trim() || currentScript;
+    return result.response.text().trim() || currentScript;
+  } catch (error) {
+    if (isGeminiQuotaError(error)) return currentScript;
+    throw error;
+  }
 }

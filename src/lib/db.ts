@@ -1,5 +1,6 @@
 import fs from "fs";
 import path from "path";
+import { migrateSettings } from "@/lib/settings-migrate";
 import type {
   AppSettings,
   BlogDraft,
@@ -23,25 +24,6 @@ interface Store {
     draftsCreated: number;
     errors: string[];
   }>;
-}
-
-const DEFAULT_SETTINGS: AppSettings = {
-  blogUrl: "",
-  blogApiKey: "",
-  blogPlatform: "none",
-  geo: "US",
-  trendHours: 4,
-  cronSecret: "",
-  openaiApiKey: "",
-  geminiApiKey: "",
-  anthropicApiKey: "",
-  openaiModel: "gpt-4o-mini",
-  geminiModel: "gemini-2.0-flash",
-  anthropicModel: "claude-3-5-haiku-latest",
-};
-
-function migrateSettings(raw: Partial<AppSettings>): AppSettings {
-  return { ...DEFAULT_SETTINGS, ...raw };
 }
 
 function ensureDataDir() {
@@ -75,7 +57,7 @@ function migrateDraft(raw: Partial<BlogDraft> & { id: string }): BlogDraft {
 function loadStore(): Store {
   ensureDataDir();
   if (!fs.existsSync(DB_FILE)) {
-    const store: Store = { drafts: [], trends: [], settings: DEFAULT_SETTINGS, fetchLogs: [] };
+    const store: Store = { drafts: [], trends: [], settings: migrateSettings({}), fetchLogs: [] };
     fs.writeFileSync(DB_FILE, JSON.stringify(store, null, 2), "utf-8");
     return store;
   }
@@ -269,8 +251,8 @@ export function logFetch(fetched: number, draftsCreated: number, errors: string[
   saveStore(store);
 }
 
-export function draftExistsForKeyword(keyword: string, withinHours = 4): boolean {
-  const since = Date.now() - withinHours * 60 * 60 * 1000;
+export function draftExistsForKeyword(keyword: string, withinMinutes = 240): boolean {
+  const since = Date.now() - withinMinutes * 60 * 1000;
   return loadStore().drafts.some(
     (d) => d.keyword === keyword && new Date(d.createdAt).getTime() > since
   );

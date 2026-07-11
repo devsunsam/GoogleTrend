@@ -30,7 +30,7 @@ npm run dev
 | 변수 | 필수 | 설명 |
 |------|------|------|
 | `GEMINI_API_KEY` | 권장 | [Google AI Studio](https://aistudio.google.com/apikey) |
-| `GEMINI_MODEL` | 선택 | 기본 `gemini-2.0-flash` |
+| `GEMINI_MODEL` | 선택 | 무시됨 — 코드에서 `gemini-2.5-flash` 고정 |
 | `CRON_SECRET` | 프로덕션 | cron API 보호용 |
 | `APP_URL` | 스케줄러 | 기본 `http://localhost:3000` |
 | `USE_SAMPLE_TRENDS` | 선택 | `true`면 샘플 데이터 사용 |

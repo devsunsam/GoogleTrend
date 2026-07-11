@@ -12,6 +12,8 @@
     "scheduler": "tsx scripts/scheduler.ts"
   },
   "dependencies": {
+    "@aws-sdk/client-eventbridge": "^3.1085.0",
+    "@aws-sdk/client-scheduler": "^3.1085.0",
     "@google/generative-ai": "^0.24.1",
     "next": "^15.3.5",
     "react": "^19.1.0",
